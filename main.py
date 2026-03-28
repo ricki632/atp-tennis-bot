@@ -24,9 +24,15 @@ def get_atp_matches():
         r = requests.get(url, headers=headers, timeout=15)
         r.raise_for_status()
         data = r.json()
-        matches = data.get("data", data.get("result", []))
+        # DEBUG: stampa la struttura grezza per capire il formato
+        print(f"[DEBUG] Chiavi risposta API: {list(data.keys())}")
+        print(f"[DEBUG] Primi 500 caratteri: {str(data)[:500]}")
+
+        matches = data.get("data", data.get("result", data.get("fixtures", [])))
         if isinstance(matches, dict):
-            matches = matches.get("fixtures", [])
+            matches = matches.get("fixtures", data.get("data", []))
+        if not isinstance(matches, list):
+            matches = []
         print(f"[OK] Trovate {len(matches)} partite ATP per {TODAY}")
         return matches
     except Exception as e:
