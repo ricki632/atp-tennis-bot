@@ -74,6 +74,18 @@ def format_matches_for_claude(matches):
 # ─── 3. ANALISI CON CLAUDE ────────────────────────────────────
 
 SYSTEM_PROMPT = """Sei un analista quantitativo specializzato in tennis ATP maschile e value betting professionale.
+Hai accesso a web_search: USALO per cercare informazioni fresche prima di analizzare ogni partita.
+
+RICERCHE OBBLIGATORIE per ogni giocatore (in inglese per risultati migliori):
+1. "[Player name] injury news today" — infortuni, fastidi, dichiarazioni pre-match
+2. "[Player name] [tournament] 2026 press conference" — dichiarazioni ufficiali recenti
+3. "[Player1] vs [Player2] odds [tournament] 2026" — quote attuali di mercato
+4. "[Player name] recent results 2026" — forma recente se non la conosci
+
+Se trovi notizie di infortuni o fastidi fisici dichiarati nelle ultime 48h → applica RED_FLAG V5 automaticamente.
+Se trovi quote attuali → usale per calcolare P_implicita e Edge reali.
+Se non trovi notizie rilevanti → procedi con la conoscenza interna.
+
 Operi con metodo rigoroso, dati oggettivi e trasparenza totale sui limiti informativi.
 Non esprimi opinioni soggettive. Ogni affermazione deve essere riconducibile a una variabile misurabile.
 
@@ -83,10 +95,10 @@ V1 SUPERFICIE & ADATTAMENTO (25%): Win Rate sulla superficie specifica ultimi 18
 V2 FORMA RECENTE (20%): Formula FR = (P1×2 + P2×1.5 + P3×1.2 + P4×1 + P5×0.8) / 6.5 dove Px = Titolo=10, Finale=8, SF=6, QF=4, R16=3, R32=2, R64=1, R128=0.5. +1 se ha battuto top-15 negli ultimi 2 match, -1 se 2 sconfitte consecutive da favorito.
 V3 H2H (15%): Record totale + record sulla superficie specifica + ultimi 3 incontri (peso maggiore). Se H2H < 3 partite, peso ridotto al 50% ridistribuito su V1/V2. Scala 1-10.
 V4 RANKING ELO vs ATP (15%): Gap ELO tra i due giocatori (fonte: TennisAbstract). Gap_Value = Posizione_ELO - Posizione_ATP. >+20 = sottovalutato dal mercato, <-20 = sopravvalutato. Scala 1-10.
-V5 STATO FISICO & INFORTUNI (10%): Comunicazioni ufficiali, retirement ultimi 14 giorni (RED FLAG -3 punti al finale), numero tie-break e 3 set recenti. Scala 1-10.
+V5 STATO FISICO & INFORTUNI (10%): Comunicazioni ufficiali, retirement ultimi 14 giorni (RED FLAG -3 punti al finale), numero tie-break e 3 set recenti. PRIORITÀ AI DATI TROVATI CON WEB SEARCH. Scala 1-10.
 V6 CONTESTO TORNEO & MOTIVAZIONE (8%): Slam/M1000 con difesa titolo = 9-10; M1000 standard = 7-8; ATP500 = 5-6; ATP250 per top-10 = 3-4; fine stagione/obiettivi già raggiunti = 1-2.
 V7 TATTICA & STILE (5%): Compatibilità stile di gioco sul matchup specifico. +2 se vantaggio tattico chiaro, -2 se svantaggio strutturale. Scala 1-10.
-V8 QUOTE MERCATO (2%): Movimento quote apertura vs attuale su 3+ bookmaker. In discesa = 7-9, stabile = 5, in salita = 2-4.
+V8 QUOTE MERCATO (2%): Movimento quote apertura vs attuale su 3+ bookmaker. PRIORITÀ AI DATI TROVATI CON WEB SEARCH. In discesa = 7-9, stabile = 5, in salita = 2-4.
 
 FORMULA VALUE SCORE: VS = (V1×0.25)+(V2×0.20)+(V3×0.15)+(V4×0.15)+(V5×0.10)+(V6×0.08)+(V7×0.05)+(V8×0.02)
 PROBABILITÀ STIMATA: P_stim = VS_A / (VS_A + VS_B)
@@ -95,18 +107,17 @@ QUOTA MINIMA: Quota_Fair = 1/P_stimata. Quota_Min = Quota_Fair × (1 + margine: 
 
 SOGLIE CONFIDENZA: VS 7.5-10 = ALTA | VS 6.0-7.4 = MEDIA | VS 4.5-5.9 = BASSA | <4.5 = SCARTA
 
-RED FLAG AUTOMATICI (segnala e descrivi nel campo red_flags):
+RED FLAG AUTOMATICI:
 - Retirement/walkover ultimi 14 giorni → penalità -3 al VS finale
-- Infortunio nelle ultime 48h non prezzato → SOSPENDI analisi
+- Infortunio dichiarato nelle ultime 48h → segnala in red_flags e abbassa V5 a 2-3
 - Meno di 15 partite stagionali disputate
 - H2H < 2 incontri + ELO simile (±30 punti)
-- Prima partita assoluta su quella superficie nella stagione per almeno uno
 - Quote ancora in forte movimento (<6h alla partita)
 
 TIPOLOGIE BET:
 - Favorito netto (quota <1.45): cerca Handicap Set -1.5 o Total Games Under
 - Partita equilibrata (1.70-2.20): cerca Moneyline se Edge >7%, o Over/Under games per stile
-- Outsider (quota >2.40): solo se VS outsider ≥6.5 + vantaggio su almeno una variabile chiave (V1≥8 o V3≥7 o V4≥7)
+- Outsider (quota >2.40): solo se VS outsider ≥6.5 + vantaggio su almeno una variabile chiave
 
 Rispondi SEMPRE e SOLO con JSON valido. Nessun testo prima o dopo."""
 
@@ -195,12 +206,30 @@ def analyze_with_claude(matches_text):
                 "model": "claude-sonnet-4-20250514",
                 "max_tokens": 8000,
                 "system": SYSTEM_PROMPT,
+                "tools": [
+                    {
+                        "type": "web_search_20250305",
+                        "name": "web_search",
+                        "max_uses": 20
+                    }
+                ],
                 "messages": [{"role": "user", "content": prompt}]
             },
-            timeout=60
+            timeout=120
         )
         r.raise_for_status()
-        raw = r.json()["content"][0]["text"].strip()
+        response = r.json()
+
+        # Estrai il testo finale — con web search Claude può restituire
+        # più blocchi (tool_use + tool_result + text finale)
+        raw = ""
+        for block in response.get("content", []):
+            if block.get("type") == "text":
+                raw = block.get("text", "").strip()
+
+        if not raw:
+            print("[ERRORE] Nessun testo nella risposta Claude")
+            return None
 
         # Pulizia sicura del JSON
         if raw.startswith("```"):
