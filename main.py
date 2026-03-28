@@ -47,18 +47,20 @@ def format_matches_for_claude(matches):
 
     lines = []
     for i, m in enumerate(matches, 1):
-        # Supporta sia struttura piatta che annidata
-        home = m.get("home", {}) or {}
-        away = m.get("away", {}) or {}
+        # Struttura API: player1/player2 + tournament
+        p1_obj = m.get("player1", {}) or {}
+        p2_obj = m.get("player2", {}) or {}
+        tourn  = m.get("tournament", {}) or {}
+        round_obj = m.get("round", {}) or {}
 
-        p1 = home.get("name") or m.get("event_first_player", "Giocatore 1")
-        p2 = away.get("name") or m.get("event_second_player", "Giocatore 2")
-        tournament = (m.get("tournament", {}) or {}).get("name") or m.get("league_name", "Torneo sconosciuto")
-        surface = (m.get("tournament", {}) or {}).get("surface") or m.get("event_surface", "N/D")
-        round_name = m.get("round", {}) if isinstance(m.get("round"), str) else (m.get("round") or {}).get("name", "")
-        r1 = home.get("rank") or m.get("event_first_player_rank", "N/A")
-        r2 = away.get("rank") or m.get("event_second_player_rank", "N/A")
-        time = m.get("time") or m.get("event_time", "")
+        p1 = p1_obj.get("name") or m.get("event_first_player", "Giocatore 1")
+        p2 = p2_obj.get("name") or m.get("event_second_player", "Giocatore 2")
+        tournament = tourn.get("name") or m.get("league_name", "Torneo sconosciuto")
+        surface = tourn.get("surface") or m.get("event_surface", "N/D")
+        round_name = round_obj.get("name", "") if isinstance(round_obj, dict) else str(round_obj)
+        r1 = p1_obj.get("rank") or m.get("event_first_player_rank", "N/A")
+        r2 = p2_obj.get("rank") or m.get("event_second_player_rank", "N/A")
+        time = m.get("date", m.get("event_time", ""))[:10] if m.get("date") else ""
 
         lines.append(
             f"{i}. {p1} (ATP #{r1}) vs {p2} (ATP #{r2})\n"
@@ -223,7 +225,8 @@ def format_telegram_message(data):
     riepilogo = data.get("riepilogo", {})
 
     if not analisi:
-        return "⚠️ Nessuna partita ATP trovata per oggi."
+        msg = "⚠️ Nessuna partita ATP trovata per oggi."
+        return msg, ""
 
     date_fmt = datetime.utcnow().strftime("%d/%m/%Y")
 
@@ -368,7 +371,8 @@ def main():
     # Step 4: Formatta e invia (2 messaggi: classifica + dettaglio)
     msg1, msg2 = format_telegram_message(analysis)
     send_telegram(msg1)
-    send_telegram(msg2)
+    if msg2:
+        send_telegram(msg2)
 
     print("\n[COMPLETATO] Analisi inviata con successo!")
 
