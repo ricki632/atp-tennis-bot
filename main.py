@@ -220,23 +220,35 @@ def analyze_with_claude(matches_text):
         r.raise_for_status()
         response = r.json()
 
-        # Estrai il testo finale — con web search Claude può restituire
-        # più blocchi (tool_use + tool_result + text finale)
+        # Con web_search Claude restituisce più blocchi — concatena tutti i text block
         raw = ""
         for block in response.get("content", []):
             if block.get("type") == "text":
-                raw = block.get("text", "").strip()
+                raw += block.get("text", "")
+        raw = raw.strip()
+
+        print(f"[DEBUG] Lunghezza risposta: {len(raw)} caratteri")
 
         if not raw:
-            print("[ERRORE] Nessun testo nella risposta Claude")
+            print("[ERRORE] Risposta Claude vuota")
             return None
 
-        # Pulizia sicura del JSON
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        raw = raw.strip()
+        # Trova il JSON nella risposta — cerca { ... } anche se c'è testo attorno
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start != -1 and end > start:
+            raw = raw[start:end]
+
+        # Pulizia backtick markdown se presenti
+        if "```" in raw:
+            parts = raw.split("```")
+            for part in parts:
+                part = part.strip()
+                if part.startswith("json"):
+                    part = part[4:].strip()
+                if part.startswith("{"):
+                    raw = part
+                    break
 
         data = json.loads(raw)
         print(f"[OK] Claude ha analizzato {len(data.get('analisi', []))} partite")
